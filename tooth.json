@@ -1,16 +1,15 @@
 {
   "format_version": 3,
   "format_uuid": "289f771f-2c9a-4d73-9f3f-8492495a924d",
-  "tooth": "github.com/LiteLDev/levilamina-mod-template",
+  "tooth": "github.com/Dofes/DataDrivenTagRegistry",
   "version": "0.0.0",
   "info": {
-    "name": "My Mod",
-    "description": "Description of my mod",
+    "name": "Data Driven Tag Registry",
+    "description": "Data-driven tag registry for LeviLamina",
     "tags": [
       "platform:levilamina",
       "type:mod"
-    ],
-    "avatar_url": "https://example.com/my-mod/avatar.png"
+    ]
   },
   "variants": [
     {
@@ -23,13 +22,13 @@
         {
           "type": "zip",
           "urls": [
-            "https://{{tooth}}/releases/download/v{{version}}/levilamina-mod-template-server-windows-x64.zip"
+            "https://{{tooth}}/releases/download/v{{version}}/DataDrivenTagRegistry-server-windows-x64.zip"
           ],
           "placements": [
             {
               "type": "dir",
-              "src": "my-mod/",
-              "dest": "plugins/my-mod/"
+              "src": "data-driven-tag-registry/",
+              "dest": "plugins/data-driven-tag-registry/"
             }
           ]
         }
@@ -57,13 +56,13 @@
         {
           "type": "zip",
           "urls": [
-            "https://{{tooth}}/releases/download/v{{version}}/levilamina-mod-template-client-windows-x64.zip"
+            "https://{{tooth}}/releases/download/v{{version}}/DataDrivenTagRegistry-client-windows-x64.zip"
           ],
           "placements": [
             {
               "type": "dir",
-              "src": "my-mod/",
-              "dest": "mods/my-mod/"
+              "src": "data-driven-tag-registry/",
+              "dest": "mods/data-driven-tag-registry/"
             }
           ]
         }

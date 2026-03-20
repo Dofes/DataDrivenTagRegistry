@@ -2,14 +2,14 @@
 
 #include "ll/api/mod/NativeMod.h"
 
-namespace my_mod {
+namespace data_driven_tag_registry {
 
-class MyMod {
+class DataDrivenTagRegistryMod {
 
 public:
-    static MyMod& getInstance();
+    static DataDrivenTagRegistryMod& getInstance();
 
-    MyMod() : mSelf(*ll::mod::NativeMod::current()) {}
+    DataDrivenTagRegistryMod() : mSelf(*ll::mod::NativeMod::current()) {}
 
     [[nodiscard]] ll::mod::NativeMod& getSelf() const { return mSelf; }
 
@@ -30,4 +30,4 @@ private:
     ll::mod::NativeMod& mSelf;
 };
 
-} // namespace my_mod
+} // namespace data_driven_tag_registry
