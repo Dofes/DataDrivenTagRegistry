@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cctype>
 #include <deque>
-#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -107,121 +106,142 @@ bool endsWithCaseInsensitive(std::string_view s, std::string_view suffix) {
     return true;
 }
 
-std::string normalizeId(std::string const& id) {
+std::string normalizeId(std::string id) {
     if (id.find(':') == std::string::npos) {
-        return std::string{"minecraft:"} + id;
+        return "minecraft:" + id;
     }
     return id;
 }
 
-std::string joinStrings(std::vector<std::string> const& values, std::string_view sep) {
-    if (values.empty()) {
-        return {};
-    }
-    std::string out = values.front();
-    for (size_t i = 1; i < values.size(); ++i) {
-        out += sep;
-        out += values[i];
-    }
-    return out;
-}
+// Iterative Tarjan SCC on integer-indexed graph — no recursion, no stack overflow risk.
+std::vector<std::vector<int>> tarjanScc(std::vector<std::vector<int>> const& graph, int n) {
+    std::vector<int>              idx(n, -1);
+    std::vector<int>              low(n, -1);
+    std::vector<bool>             onStack(n, false);
+    std::vector<int>              stack;
+    int                           index = 0;
+    std::vector<std::vector<int>> sccs;
 
-std::vector<std::vector<std::string>>
-tarjanScc(std::unordered_map<std::string, std::unordered_set<std::string>> const& graph) {
-    int                                   index = 0;
-    std::vector<std::string>              stack;
-    std::unordered_set<std::string>       onStack;
-    std::unordered_map<std::string, int>  idx;
-    std::unordered_map<std::string, int>  low;
-    std::vector<std::vector<std::string>> sccs;
+    struct Frame {
+        int node;
+        int nextNeighbor;
+    };
+    std::vector<Frame> dfsStack;
 
-    std::function<void(std::string const&)> dfs = [&](std::string const& v) {
-        idx[v] = index;
-        low[v] = index;
-        ++index;
-        stack.push_back(v);
-        onStack.insert(v);
+    for (int root = 0; root < n; ++root) {
+        if (idx[root] != -1) {
+            continue;
+        }
+        idx[root] = low[root] = index++;
+        stack.push_back(root);
+        onStack[root] = true;
+        dfsStack.push_back({root, 0});
 
-        auto found = graph.find(v);
-        if (found != graph.end()) {
-            for (auto const& w : found->second) {
-                if (idx.find(w) == idx.end()) {
-                    dfs(w);
-                    low[v] = std::min(low[v], low[w]);
-                } else if (onStack.find(w) != onStack.end()) {
+        while (!dfsStack.empty()) {
+            auto& frame = dfsStack.back();
+            int   v     = frame.node;
+
+            if (frame.nextNeighbor < static_cast<int>(graph[v].size())) {
+                int w = graph[v][frame.nextNeighbor];
+                ++frame.nextNeighbor;
+
+                if (idx[w] == -1) {
+                    idx[w] = low[w] = index++;
+                    stack.push_back(w);
+                    onStack[w] = true;
+                    dfsStack.push_back({w, 0});
+                } else if (onStack[w]) {
                     low[v] = std::min(low[v], idx[w]);
                 }
-            }
-        }
-
-        if (low[v] == idx[v]) {
-            std::vector<std::string> comp;
-            while (!stack.empty()) {
-                auto x = stack.back();
-                stack.pop_back();
-                onStack.erase(x);
-                comp.push_back(std::move(x));
-                if (comp.back() == v) {
-                    break;
+            } else {
+                if (low[v] == idx[v]) {
+                    std::vector<int> comp;
+                    while (true) {
+                        int x = stack.back();
+                        stack.pop_back();
+                        onStack[x] = false;
+                        comp.push_back(x);
+                        if (x == v) {
+                            break;
+                        }
+                    }
+                    sccs.push_back(std::move(comp));
+                }
+                dfsStack.pop_back();
+                if (!dfsStack.empty()) {
+                    low[dfsStack.back().node] = std::min(low[dfsStack.back().node], low[v]);
                 }
             }
-            sccs.push_back(std::move(comp));
-        }
-    };
-
-    for (auto const& [v, _] : graph) {
-        if (idx.find(v) == idx.end()) {
-            dfs(v);
         }
     }
+
     return sccs;
 }
 
 ResolveOneTypeResult resolveOneType(std::unordered_map<std::string, TagNode> const& tags, bool strictCycle = false) {
     ResolveOneTypeResult result;
 
-    std::unordered_set<std::string> nodes;
-    nodes.reserve(tags.size());
-    for (auto const& [name, _] : tags) {
-        nodes.insert(name);
+    int const n = static_cast<int>(tags.size());
+    if (n == 0) {
+        return result;
     }
 
-    std::unordered_map<std::string, std::unordered_set<std::string>> graph;
-    graph.reserve(nodes.size());
-    for (auto const& n : nodes) {
-        graph.emplace(n, std::unordered_set<std::string>{});
+    // Build name <-> index mapping: all subsequent graph operations use int indices
+    // instead of string keys, turning every lookup from O(hash+compare) to O(1).
+    std::vector<std::string const*>      indexToName(n);
+    std::unordered_map<std::string, int> nameToIndex;
+    nameToIndex.reserve(n);
+    {
+        int i = 0;
+        for (auto const& [name, _] : tags) {
+            nameToIndex[name] = i;
+            indexToName[i]    = &name;
+            ++i;
+        }
     }
 
+    // Build int-indexed adjacency list
+    std::vector<std::vector<int>> graph(n);
     for (auto const& [name, node] : tags) {
+        int u = nameToIndex[name];
         for (auto const& ref : node.refs) {
-            if (nodes.find(ref) != nodes.end()) {
-                graph[name].insert(ref);
+            auto it = nameToIndex.find(ref);
+            if (it != nameToIndex.end()) {
+                graph[u].push_back(it->second);
             } else {
                 result.warnings.emplace_back(fmt::format("标签 #{} 引用未定义的标签 #{}", name, ref));
             }
         }
     }
 
-    auto sccs = tarjanScc(graph);
+    auto sccs = tarjanScc(graph, n);
 
-    std::unordered_map<std::string, int> compId;
-    compId.reserve(nodes.size());
+    // Map each node to its SCC component index
+    std::vector<int> compId(n);
     for (int i = 0; i < static_cast<int>(sccs.size()); ++i) {
-        for (auto const& n : sccs[i]) {
-            compId[n] = i;
+        for (int node : sccs[i]) {
+            compId[node] = i;
         }
     }
 
+    // Detect cycles: SCC with size > 1, or single node with self-loop
     for (auto const& comp : sccs) {
         if (comp.size() > 1) {
-            result.cycles.push_back(comp);
+            std::vector<std::string> names;
+            names.reserve(comp.size());
+            for (int node : comp) {
+                names.emplace_back(*indexToName[node]);
+            }
+            result.cycles.push_back(std::move(names));
             continue;
         }
         if (!comp.empty()) {
-            auto const& n  = comp.front();
-            auto        it = graph.find(n);
-            if (it != graph.end() && it->second.find(n) != it->second.end()) {
-                result.cycles.push_back(comp);
+            int v = comp.front();
+            for (int w : graph[v]) {
+                if (w == v) {
+                    result.cycles.push_back({*indexToName[v]});
+                    break;
+                }
             }
         }
     }
@@ -230,46 +250,47 @@ ResolveOneTypeResult resolveOneType(std::unordered_map<std::string, TagNode> con
         throw std::runtime_error("检测到循环引用");
     }
 
-    auto                                         compCount = static_cast<int>(sccs.size());
-    std::vector<std::unordered_set<std::string>> compDirect(static_cast<size_t>(compCount));
-    std::vector<std::unordered_set<int>>         compSucc(static_cast<size_t>(compCount));
+    // Build condensed DAG
+    auto const                                   compCount = static_cast<int>(sccs.size());
+    std::vector<std::unordered_set<std::string>> compDirect(compCount);
+    std::vector<std::unordered_set<int>>         compSucc(compCount);
 
     for (auto const& [name, node] : tags) {
-        int   c      = compId[name];
-        auto& direct = compDirect[static_cast<size_t>(c)];
+        int   u      = nameToIndex[name];
+        int   c      = compId[u];
+        auto& direct = compDirect[c];
         direct.insert(node.directItems.begin(), node.directItems.end());
-        for (auto const& r : graph[name]) {
-            int c2 = compId[r];
+        for (int w : graph[u]) {
+            int c2 = compId[w];
             if (c != c2) {
-                compSucc[static_cast<size_t>(c)].insert(c2);
+                compSucc[c].insert(c2);
             }
         }
     }
 
-    std::vector<int> indeg(static_cast<size_t>(compCount), 0);
+    // Topological sort (Kahn's algorithm)
+    std::vector<int> indeg(compCount, 0);
     for (int c = 0; c < compCount; ++c) {
-        for (int d : compSucc[static_cast<size_t>(c)]) {
-            ++indeg[static_cast<size_t>(d)];
+        for (int d : compSucc[c]) {
+            ++indeg[d];
         }
     }
 
     std::deque<int> q;
     for (int c = 0; c < compCount; ++c) {
-        if (indeg[static_cast<size_t>(c)] == 0) {
+        if (indeg[c] == 0) {
             q.push_back(c);
         }
     }
 
     std::vector<int> topo;
-    topo.reserve(static_cast<size_t>(compCount));
+    topo.reserve(compCount);
     while (!q.empty()) {
         int c = q.front();
         q.pop_front();
         topo.push_back(c);
-        for (int d : compSucc[static_cast<size_t>(c)]) {
-            auto& ref = indeg[static_cast<size_t>(d)];
-            --ref;
-            if (ref == 0) {
+        for (int d : compSucc[c]) {
+            if (--indeg[d] == 0) {
                 q.push_back(d);
             }
         }
@@ -279,20 +300,31 @@ ResolveOneTypeResult resolveOneType(std::unordered_map<std::string, TagNode> con
         throw std::runtime_error("内部错误：压缩图不是 DAG");
     }
 
-    std::vector<std::unordered_set<std::string>> compResolved(static_cast<size_t>(compCount));
+    // Propagate items in reverse topological order
+    std::vector<std::unordered_set<std::string>> compResolved(compCount);
     for (auto it = topo.rbegin(); it != topo.rend(); ++it) {
         int  c = *it;
-        auto r = compDirect[static_cast<size_t>(c)];
-        for (int dep : compSucc[static_cast<size_t>(c)]) {
-            auto const& depSet = compResolved[static_cast<size_t>(dep)];
+        auto r = std::move(compDirect[c]);
+        for (int dep : compSucc[c]) {
+            auto const& depSet = compResolved[dep];
             r.insert(depSet.begin(), depSet.end());
         }
-        compResolved[static_cast<size_t>(c)] = std::move(r);
+        compResolved[c] = std::move(r);
     }
 
-    for (auto const& n : nodes) {
-        auto c             = compId[n];
-        result.resolved[n] = compResolved[static_cast<size_t>(c)];
+    // Build result: nodes in the same SCC share the same resolved set,
+    // move the last copy instead of copying every one.
+    for (int i = 0; i < compCount; ++i) {
+        auto const& comp     = sccs[i];
+        auto&       resolved = compResolved[i];
+        for (size_t j = 0; j < comp.size(); ++j) {
+            auto const& name = *indexToName[comp[j]];
+            if (j + 1 < comp.size()) {
+                result.resolved[name] = resolved;
+            } else {
+                result.resolved[name] = std::move(resolved);
+            }
+        }
     }
 
     return result;
@@ -315,7 +347,7 @@ ResolveAllResult resolveDataDrivenTags(std::vector<RawEntry> const& entries, boo
                     node.refs.insert(s.substr(1));
                 }
             } else {
-                node.directItems.insert(s);
+                node.directItems.insert(normalizeId(std::move(s)));
             }
         }
     }
@@ -344,11 +376,8 @@ std::optional<std::string> getOptionalTrimmedString(nlohmann::json const& obj, c
     return s;
 }
 
-void iteratePacksCompat(ResourcePackManager const& rpm, std::function<void(PackInstance const&)> const& pred) {
-    if (!pred) {
-        throw std::bad_function_call{};
-    }
-
+template <typename F>
+void iteratePacksCompat(ResourcePackManager const& rpm, F const& pred) {
     auto forEachInStackSlot = [&](ll::UntypedStorage<8, 8> const& slot) {
         auto const& stackPtr = slot.as<std::unique_ptr<ResourcePackStack>>();
         if (!stackPtr) {
@@ -449,34 +478,20 @@ void logCycles(
         }
         ++stats.cycleTypeCount;
         for (auto const& comp : compList) {
-            getLogger().warn("[DataDrivenTags] [{}] 检测到循环引用分量: {}", type, joinStrings(comp, " -> "));
+            getLogger().warn("[DataDrivenTags] [{}] 检测到循环引用分量: {}", type, fmt::join(comp, " -> "));
         }
     }
 }
 
+// IDs are pre-normalized in resolveDataDrivenTags, so a single lookup suffices.
 Item* tryGetItemByName(ItemRegistryRef const& itemRegistry, std::string const& id) {
-    auto direct = itemRegistry.lookupByNameNoAlias(std::string_view{id});
-    if (direct) {
-        return direct.get();
-    }
-    auto normalized = normalizeId(id);
-    auto fallback   = itemRegistry.lookupByNameNoAlias(std::string_view{normalized});
-    if (fallback) {
-        return fallback.get();
-    }
-    return nullptr;
+    auto result = itemRegistry.lookupByNameNoAlias(std::string_view{id});
+    return result ? result.get() : nullptr;
 }
 
 BlockType* tryGetBlockTypeByName(BlockTypeRegistry const& blockRegistry, std::string const& id) {
-    auto direct = blockRegistry.lookupByName(HashedString{id}, false);
-    if (direct) {
-        return direct.get();
-    }
-    auto fallback = blockRegistry.lookupByName(HashedString{normalizeId(id)}, false);
-    if (fallback) {
-        return fallback.get();
-    }
-    return nullptr;
+    auto result = blockRegistry.lookupByName(HashedString{id}, false);
+    return result ? result.get() : nullptr;
 }
 
 void applyResolvedTags(Level& level) {
